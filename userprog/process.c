@@ -78,7 +78,7 @@ initd (void *f_name) {
 // #endif
   
 	process_init ();
-
+	thread_current()->working_dir = dir_open_root();
 	if (process_exec (f_name) < 0)
 		PANIC("Fail to launch initd\n");
 	NOT_REACHED ();
@@ -175,10 +175,16 @@ __do_fork (void *aux) {
 		goto error;
 #endif
 
+	/* Jack - Filesys */
+#ifdef FILESYS
+	curr_thread->working_dir = dir_reopen(parent->working_dir);
+#endif
+
+
     /*** hyeRexx : duplicate files ***/
     for(int fd = curr_thread->fd_edge; fd < parent->fd_edge; fd = ++(curr_thread->fd_edge)) 
     {
-        if(parent->fdt[fd] == NULL) continue;
+        if(parent->fdt[fd] == NULL) continue; 
         curr_thread->fdt[fd] = file_duplicate(parent->fdt[fd]);
         if(curr_thread->fdt[fd] == NULL) goto error;
     }
@@ -350,6 +356,11 @@ process_exit (void) {
 	/* Cleanup resources releated to virtual memory */
 	process_cleanup ();
 
+#ifdef FILESYS
+	/* Jack */
+	dir_close(thread_current()->working_dir);
+#endif
+
 	/* Close running file of current thread */
 	if (curr->running_file)
 	{
@@ -476,7 +487,11 @@ load (const char *file_name, struct intr_frame *if_) {
 	process_activate (thread_current ());
 
 	// /* Open executable file. */
+	struct dir *bu_dir = thread_current()->working_dir;
+	thread_current()->working_dir = dir_open_root();
 	file = filesys_open (file_name);
+	dir_close(thread_current()->working_dir);
+	thread_current()->working_dir = bu_dir;
 	if (file == NULL) {  
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
@@ -828,7 +843,6 @@ setup_stack (struct intr_frame *if_) {
 }
 #endif /* VM */
 
-#ifdef USERPROG
 /*** Jack ***/
 /*** Return file table pointer matched by fd in file descriptor table of current thread  ***/
 struct file *process_get_file(int fd)
@@ -848,7 +862,12 @@ void process_close_file (int fd)
 	struct file *f = thread_current()->fdt[fd];
 	if (f == NULL)
 		return;
-
+	
+	/* eleshock */
+	struct dir *dir = file_dir(f);
+	if (isdir (fd))
+		free(dir);
+		
 	file_close(f);
 	thread_current()->fdt[fd] = NULL;
 }
@@ -860,7 +879,14 @@ int process_add_file(struct file *f)
     int new_fd = curr_thread->fd_edge++;    // get fd_edge and ++
     ASSERT(new_fd > 1);
 	if (new_fd > 128)
-		return -1;
+		new_fd = 2;
+	while (curr_thread->fdt[new_fd] != NULL) {
+		++new_fd;
+		if (new_fd == curr_thread->fd_edge)
+			break;
+		if (new_fd > 128)
+			new_fd = 2;
+	}
     curr_thread->fdt[new_fd] = f;    // set *new_fd = new_file
 
     return new_fd;
@@ -900,5 +926,3 @@ void remove_child_process(struct thread *cp)
 	palloc_free_page(cp);
 	return;
 }
-
-#endif // USERPROG
